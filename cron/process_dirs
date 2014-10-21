@@ -1,0 +1,43 @@
+#!/bin/bash
+
+#this script is run by a cron job on sandy2
+
+set -e
+set -o pipefail
+umask 002
+
+PRI=/n/illumina01/primary_data
+CASROOT=/n/informatics/seq/casava
+TEST=""
+PARAMS=""
+if [[ ${1-} == "-t" ]]; then
+  TEST="echo"
+fi
+
+TYP=$(type -t module) || true
+if [[ $TYP != "function" ]]; then
+  source /etc/profile
+fi
+
+echo "$0  $(date)" >> $CASROOT/cron/log.txt
+
+#process runs in $PRI that are finished and do not contain casava_started.txt or casava_skip.txt 
+cd "$PRI"
+for D in *; do 
+  [[ ! -d "$PRI/$D" ]] && continue
+  if [[ $D =~ ^[0-9]{6}_NS500422 ]]; then #if run was NextSeq
+    cd "$PRI/$D"
+    if [[ -e RTAComplete.txt && -e SampleSheet.csv && ! -e bcl2fastq_seen.txt ]]; then
+      $TEST touch bcl2fastq_seen.txt
+      echo "New NextSeq run: $D" |  mail -s "$USER"@fas.harvard.edu
+    fi
+  elif [[ $D =~ ^[0-9]{6}_(SN343|D00365) ]]; then  #if run was HiSeq 2000 (SN343) or HiSeq 2500 (D00365)
+    cd "$PRI/$D"
+    if [[ -e RTAComplete.txt && -e SampleSheet.csv && ! -e casava_started.txt && ! -e casava_skip.txt ]]; then
+      $TEST touch casava_started.txt
+      COMMAND="$CASROOT/bin/casava begin --run $D"
+      echo "$(date): $COMMAND" >> $CASROOT/cron/runs.txt
+      $TEST $COMMAND
+    fi
+  fi
+done

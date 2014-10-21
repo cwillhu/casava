@@ -1,0 +1,219 @@
+#!/bin/bash
+
+set -eu
+umask 002
+. $(dirname $(which $0))/casava.config
+. $CASROOT/bin/utils.sh
+
+usage ()
+{
+  echo 
+  echo "Usage: casava begin  [Options] --run <run_name>"
+  echo "       casava postprocess [Options] --run_out <run_name>"
+  echo "       casava fastqc [Options] --run_out <run_name>"
+  echo "       casava merge  [Options] --run_out <run_name>"
+  echo "       casava md5sum [Options] --run_out <run_name>"
+  echo "       casava help"
+  echo 
+  echo "Options:                                                                                                     
+  --run               Name of run directory in <primarydir>
+  --run_suffix        Suffix to add to run name to create new output run directory 
+  --run_out           Output run directory name. If running casava begin and both run_suffix and run
+                      are specified, run_out = <run><run_suffix>
+  --lsubset           When running casava begin, a comma-separated list of lanes to process.
+                      Default is all lanes.
+  --tiles             When running casava begin, a comma-separated list of regular expressions used to select tiles.
+                      If this parameter is specified, lsubset must specify a single lane for processing.
+  --mismatches        Number of mismatches to allow in index when demultiplexing. Default is 0
+  --store             1 to store records in database; 0 otherwise. Default is 1
+  --filter            1 to turn on RTA chastity filter; 0 otherwise. Default is 1
+  --fastqc            1 to turn on FastQC; 0 otherwise. Default is 1
+  --fastqc_force      1 to turn on FastQC even when number of samples is large; 0 otherwise. Default is 0
+  --ignore_nobcl      1 to ignore missing bcl files; 0 otherwise. Default is 0
+  --ignore_nocontrol  1 to ignore missing control files; 0 otherwise. Default is 0
+  --md5sum            1 to create md5sum checksums; 0 otherwise. Default is 1
+  --clean             1 to clear log and output directories before processing; 0 otherwise. Default is 1
+  --merge             1 to merge sample fastq data across lanes; 0 otherwise. Default is 0
+  --quiet             1 to suppress output to STDOUT; 0 otherwise. Default is 0
+  --nthreads          Number of threads for casava processing. Default is 16
+  --primarydir        Directory containing Illumina runs. Must contain run directory specified with -run option.
+                      Default is /n/illumina01/primary_data
+  --progressdir       Directory for intermediate results. Default is /n/seqcfs/sequencing/analysis_in_progress
+  --finisheddir       Directory for finished results. Default is /n/seqcfs/sequencing/analysis_finished
+  --finaldir          Directory to which finished results are copied. Default is /n/ngsdata
+  --casdirlist        File containing the names of the lane folders to process. By default this file is
+                      created by casava begin and its default name is <logdir>/folders.txt. Use -lsubset
+                      instead of -casdirlist if running casava begin.
+  --logdir            Log directory where code, copy of checksums and any job errors are written.
+                      The default logdir is \$CASLOGROOT/<run_out>. \$CASLOGROOT is specified in casava.config.
+                      If logdir already exists and clean == 0, a new logdir is created within the existing one.
+  --msamplist         Optional file containing names of samples to merge across lanes after postprocessing 
+                      and fastqc. One sample name per line. Names must match this run's SampleSheet.csv. The 
+                      default is to do the merge for all samples in the lane folders listed in <casdirlist>.
+  -h                  Help"
+  exit $1
+}
+
+[[ ${1-help} =~ help|--help|-h ]] && usage 0
+
+# Defaults
+#note: var for lsubset is LANES.
+NLANES=""
+LANES=""
+TILES=""
+READTYPE=""
+FILTER=1   #1 to filter, 0 otherwise
+FASTQC=1   #1 to run Fastqc, 0 otherwise 
+FASTQC_RUNLIMIT=20 #if number of Fastqc runs per CASAVA run would be greater than FASTQC_RUNLIMIT, then Fastqc is not run
+FASTQC_FORCE=0   #1 to force run of Fastqc despite FASTQC_RUNLIMIT. 0 otherwise 
+IGNORE_NOBCL=0  #1 to ignore missing bcls; 0 otherwise
+IGNORE_NOCONTROL=0  #1 to ignore missing control filess; 0 otherwise
+MD5SUM=1   #1 to run checksums; 0 otherwise 
+CLEAN=1    #1 to clear output and log folders before writing results; 0 otherwise 
+STORE=1    #1 to store record in database; 0 otherwise 
+MERGE=0    #1 to merge sample fastq.gz files across lanes; 0 otherwise 
+QUIET=0    #1 to suppress output to STDOUT; 0 otherwise 
+MISMATCHES=0
+MSAMPLIST=""
+NTHREADS=16
+PRIMARY_DATA_DIR="/n/illumina01/primary_data"
+ANALYSIS_IN_PROGRESS_DIR="/n/seqcfs/sequencing/analysis_in_progress"
+ANALYSIS_FINISHED_DIR="/n/seqcfs/sequencing/analysis_finished"
+ANALYSIS_FINAL_DIR="/n/ngsdata"
+LOGDIR=""
+CASDIRLIST=""
+RUN=""
+RUN_SUFFIX=""
+RUN_OUT=""
+JOBID=""
+DB_JOBID=""
+                                                           
+# Parse command 
+COMMAND_LINE="$@"
+COMMAND=$1
+shift
+[[ ! $COMMAND =~ begin|postprocess|fastqc|merge|md5sum ]] && error "Unknown command: $COMMAND. Command must be one of begin, postprocess, fastqc or md5sum. Use -h for details."
+
+# Parse input options
+while [ $# != 0 ]; do
+  case $1 in
+    --lsubset)      LANES=$(echo $2 | tr , " " | sort -un); shift;;
+    --tiles)        TILES=$2; shift;;
+    --filter)       FILTER=$2; shift;;
+    --fastqc)       FASTQC=$2; shift;;
+    --fastqc_force) FASTQC_FORCE=$2; shift;;
+    --ignore_nobcl) IGNORE_NOBCL=$2; shift;;
+    --ignore_nocontrol) IGNORE_NOCONTROL=$2; shift;;
+    --md5sum)       MD5SUM=$2; shift;;
+    --clean)        CLEAN=$2; shift;;
+    --merge)        MERGE=$2; shift;;
+    --msamplist)    MSAMPLIST=$2; shift;;
+    --mismatches)   MISMATCHES=$2; shift;;
+    --store)        STORE=$2; shift;;
+    --nthreads)     NTHREADS=$2; shift;;
+    --primarydir)   PRIMARY_DATA_DIR=$2; shift;;
+    --progressdir)  ANALYSIS_IN_PROGRESS_DIR=$2; shift;;
+    --finisheddir)  ANALYSIS_FINISHED_DIR=$2; shift;;
+    --finaldir)     ANALYSIS_FINAL_DIR=$2; shift;;
+    --logdir)       LOGDIR=$2; shift;;
+    --quiet)        QUIET=$2; shift;;
+    --run)          RUN=$2; shift;;
+    --run_suffix)   RUN_SUFFIX=$2; shift;;
+    --run_out)      RUN_OUT=$2; shift;;
+    -h)            usage 0;;
+    *)             echo -e "\nUnrecognized option: $1\n"; usage 1;;
+  esac
+  shift
+done
+
+#Get run name
+[[ -n $RUN && ! $RUN =~ ^[-_A-Za-z0-9]+$ ]] && error "Invalid Illumina run name: $RUN"
+
+#Check and set some parameters for "begin" command
+if [[ $COMMAND == "begin" ]]; then
+  [[ $RUN  == "" ]] && error "Run name must be specified with --run."
+  [[ $RUN_OUT == "" ]] && RUN_OUT=${RUN}$RUN_SUFFIX
+  [[ $TILES != "" ]] && [[ ! $LANES =~ ^[1-8]$ ]] && error "When using --tiles, you must specify a single lane with --lsubset."
+  [[ $LOGDIR == "" ]] && LOGDIR="$CASLOGROOT/$RUN_OUT"
+
+  #make new logdir name if clean==0 and current logdir already exists
+  if [[ $CLEAN == 0 && -d $LOGDIR ]]; then
+    COUNTER=2
+    while [ -d $LOGDIR/RUN_$COUNTER ]; do
+      COUNTER=$((COUNTER+1))
+    done    
+    LOGDIR=$LOGDIR/RUN_$COUNTER
+  fi
+fi
+
+#Check and set parameters for all commands
+[[ $RUN_OUT == "" ]] && error "Value must be specified for --run_out"
+[[ ! $RUN_OUT =~ ^[-_A-Za-z0-9]+$ ]] && error "Invalid Illumina run_out name: $RUN_OUT  It should contain only alphanumeric characters, underscore or dash."
+[[ $LOGDIR == "" ]] && LOGDIR="$CASLOGROOT/$RUN_OUT"
+[[ $RUN == "" ]] && RUN=$RUN_OUT
+[[ $CASDIRLIST == "" ]] && CASDIRLIST="$LOGDIR/folders.txt"
+
+#Make sure there are no other jobs for this run output name
+JOBS=$(squeue -h -o "%j" -p informatics-dev)
+if [[ $JOBS =~ $RUN_OUT ]]; then
+  printf '%s\n%s\n%s\n' "There is already a job running for $RUN_OUT" "Current jobs:" "$JOBS"
+  error "Either specify a different output name with --run_out, or kill existing job for $RUN_OUT before attempting this job."
+fi
+
+#Prepare log directory
+[[ $CLEAN == 1 && $COMMAND == "begin" ]] && rm -rf $LOGDIR/* #clean log directory if clean==1 and it exists
+mkdir -p $LOGDIR #create logdir if it doesn't exist
+
+#Additional setup for each stage
+if [[ $COMMAND == "begin" ]]; then
+  touch $PRIMARY_DATA_DIR/$RUN/casava_started.txt #indicate to cron job that casava processing has been attempted for this run
+  $CASROOT/bin/ss_validate.pl -samplesheet $PRIMARY_DATA_DIR/$RUN/SampleSheet.csv
+  NLANES=$(sed -nr 's!.*LaneCount="(2|8)".*!\1!p' $PRIMARY_DATA_DIR/$RUN/RunInfo.xml) #get number of lanes for this run from RunInfo.xml
+  if [[ $LANES != "" ]]; then
+    for LANE in $LANES; do
+      if [[ $LANE < 1 ]] || [[ $LANE > $NLANES ]]; then
+        error "Invalid lane specified with --lsubset: $LANE. Valid lanes range from 1 to $NLANES."
+      fi
+    done
+  else #if LANES was not specified, set to all lanes
+    LANES=$(seq -s " " $NLANES) 
+  fi
+elif [[ $COMMAND == "fastqc" ]]; then
+  FASTQC=1
+elif [[ $COMMAND == "merge" ]]; then
+  MERGE=1
+elif [[ $COMMAND == "md5sum" ]]; then
+  MD5SUM=1
+fi
+
+if [[ $COMMAND == "begin" || $COMMAND == "postprocess" ]]; then
+  [[ -d $PRIMARY_DATA_DIR/$RUN/ ]] || error "No such directory: $PRIMARY_DATA_DIR/$RUN"
+  READTYPE=$(get_readtype "$PRIMARY_DATA_DIR/$RUN")
+fi
+
+if [[ $COMMAND == "postprocess" || $COMMAND == "fastqc" || $COMMAND == "merge" ]]; then
+  [[ $CASDIRLIST == "" ]] && CASDIRLIST="$LOGDIR/folders.txt"
+  [ ! -e "$CASDIRLIST" ] && error "File $CASDIRLIST does not exist."
+fi
+
+#Some log information...
+[ "$QUIET" = 0 ] && echo "Log directory: $LOGDIR" 
+echo "$COMMAND_LINE" >> $LOGDIR/log.out
+
+#Record var state (used by main job)
+save_state $LOGDIR/casava_state.sh
+
+#Launch main job
+JOBID=$(begin_job $COMMAND $LOGDIR -ntasks $(($NTHREADS/4)) -size big)
+echo "\"$COMMAND\" Job Number: $JOBID" >> $LOGDIR/log.out
+
+#Update state (for DBupdate job)
+save_state $LOGDIR/casava_state.sh
+
+#Launch DBupdate job
+DB_JOBID=$(begin_job DBupdate $LOGDIR -after $JOBID -mailend 0)
+echo "\"$COMMAND\" DBupdate Job Number: $DB_JOBID" >> $LOGDIR/log.out
+
+#Print job ids
+[ "$QUIET" = 0 ] && echo "Jobs: $JOBID $DB_JOBID"
+

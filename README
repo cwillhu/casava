@@ -1,0 +1,44 @@
+
+Usage: casava begin  [Options] --run <run_name>
+       casava postprocess [Options] --run_out <run_name>
+       casava fastqc [Options] --run_out <run_name>
+       casava merge  [Options] --run_out <run_name>
+       casava md5sum [Options] --run_out <run_name>
+       casava help
+
+Options:                                                                                                     
+  --run               Name of run directory in <primarydir>
+  --run_suffix        Suffix to add to run name to create new output run directory 
+  --run_out           Output run directory name. If running casava begin and both run_suffix and run
+                      are specified, run_out = <run><run_suffix>
+  --lsubset           When running casava begin, a comma-separated list of lanes to process.
+                      Default is all lanes.
+  --tiles             When running casava begin, a comma-separated list of regular expressions used to select tiles.
+                      If this parameter is specified, lsubset must specify a single lane for processing.
+  --mismatches        Number of mismatches to allow in index when demultiplexing. Default is 0
+  --store             1 to store records in database; 0 otherwise. Default is 1
+  --filter            1 to turn on RTA chastity filter; 0 otherwise. Default is 1
+  --fastqc            1 to turn on FastQC; 0 otherwise. Default is 1
+  --fastqc_force      1 to turn on FastQC even when number of samples is large; 0 otherwise. Default is 0
+  --ignore_nobcl      1 to ignore missing bcl files; 0 otherwise. Default is 0
+  --ignore_nocontrol  1 to ignore missing control files; 0 otherwise. Default is 0
+  --md5sum            1 to create md5sum checksums; 0 otherwise. Default is 1
+  --clean             1 to clear log and output directories before processing; 0 otherwise. Default is 1
+  --merge             1 to merge sample fastq data across lanes; 0 otherwise. Default is 0
+  --quiet             1 to suppress output to STDOUT; 0 otherwise. Default is 0
+  --nthreads          Number of threads for casava processing. Default is 16
+  --primarydir        Directory containing Illumina runs. Must contain run directory specified with -run option.
+                      Default is /n/illumina01/primary_data
+  --progressdir       Directory for intermediate results. Default is /n/seqcfs/sequencing/analysis_in_progress
+  --finisheddir       Directory for finished results. Default is /n/seqcfs/sequencing/analysis_finished
+  --finaldir          Directory to which finished results are copied. Default is /n/ngsdata
+  --casdirlist        File containing the names of the lane folders to process. By default this file is
+                      created by casava begin and its default name is <logdir>/folders.txt. Use -lsubset
+                      instead of -casdirlist if running casava begin.
+  --logdir            Log directory where code, copy of checksums and any job errors are written.
+                      The default logdir is $CASLOGROOT/<run_out>. $CASLOGROOT is specified in casava.config.
+                      If logdir already exists and clean == 0, a new logdir is created within the existing one.
+  --msamplist         Optional file containing names of samples to merge across lanes after postprocessing 
+                      and fastqc. One sample name per line. Names must match this run's SampleSheet.csv. The 
+                      default is to do the merge for all samples in the lane folders listed in <casdirlist>.
+  -h                  Help
